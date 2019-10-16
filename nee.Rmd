@@ -1,0 +1,157 @@
+---
+title: NEE flux tower reconciliation
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+```
+
+$$
+NEE = GPP - R
+$$
+
+Therefore...
+
+$$
+GPP = NEE + R
+$$
+
+$$
+R = R_a + R_h
+$$
+
+$$
+R_a = R_{a,below} + R_{a,above}
+$$
+
+$$
+R_{chamber} = R_{a,below} + R_h
+$$
+
+Let $f$ be the root contribution to $R_{chamber}$, such that:
+
+$$
+R_{a,below} = f R_{chamber}
+$$
+
+$$
+R_h = (1 - f) R_{chamber}
+$$
+
+Let $\phi$ be the belowground fraction of autotrophic respiration, such that:
+
+$$
+R_{a,below} = \phi R_a
+$$
+
+$$
+R_{a,above} = (1 - \phi) R_a
+$$
+
+Rearranging, we get:
+
+$$
+R_a = \frac{R_{a,above}}{1 - \phi}
+$$
+
+This leads to a complete model of GPP as:
+
+$$
+GPP = NEE + R_h + R_a
+$$
+
+...where
+
+$$
+R_h = (1 - f) * R_{chamber}
+$$
+
+...and...
+
+$$
+R_{a} = \frac{R_{a,below}}{1 - \phi}
+$$
+
+This creates a GPP model with 2 inputs---NEE (flux tower) and R~chamber~ (COSORE)---and 2 parameters (fraction of R~chamber~ from roots, $f$; fraction of autotrophic respiration aboveground, $\phi$):
+
+```{r}
+#' @param nee Flux tower net ecosystem exchange
+#' @param r_chamber Respiration chamber measurement
+#' @param phi aboveground fraction of autotrophic respiration
+#' @param f belowground autotrophic fraction of chamber resp that 
+gpp_r <- function(nee, r_chamber, phi, f) {
+  r_h <- (1 - f) * r_chamber
+  r_ab <- f * r_chamber
+  r <- r_ab / (1 - phi) + r_h
+  gpp <- nee + r
+  return(gpp)
+}
+```
+
+Define some prior distributions.
+
+```{r}
+par(mfrow = c(1, 2))
+curve(dbeta(x, 2, 2), 0, 1, main = "f")
+curve(dbeta(x, 2, 2), 0, 1, main = "phi")
+```
+
+Now, draw some parameters and do some simulations.
+
+```{r}
+n <- 10000
+
+result <- tibble(
+  method = "NEE",
+  f = rbeta(n, 2, 2),
+  phi = rbeta(n, 2, 2),
+  gpp = gpp_r(6, 3, phi, f)
+)
+
+ggplot(result) +
+  aes(x = gpp) +
+  geom_density() +
+  coord_cartesian(xlim = c(0, 50)) +
+  theme_bw()
+```
+
+At the same time...
+
+$$
+GPP = m NIR_v + b
+$$
+
+```{r}
+gpp_nirv <- function(nirv, m, b) {
+  out <- m * nirv + b
+  # Convert units
+  # umol C m-2 s-1 to Mg ha-1 year-1
+  out * 12 / 1e6 * (60 * 60 * 24 * 365) / 10000
+}
+```
+
+Define priors on GPP parameters
+
+```{r}
+par(mfrow = c(1, 2))
+curve(dexp(x, 0.5), 0, 8, main = "NIRv int.")
+curve(dnorm(x, 65, 10), 30, 110, main = "NIRv slope")
+```
+
+Now, add the NIR~v~.
+
+```{r}
+result_nir <- tibble(
+  method = "NIR",
+  b = rexp(n, 0.5),
+  m = rnorm(n, 65, 10),
+  gpp = gpp_nirv(0.4, m, b)
+)
+
+result %>%
+  bind_rows(result_nir) %>%
+  ggplot(aes(x = gpp, fill = method)) +
+  geom_density() +
+  coord_cartesian(xlim = c(0, 50)) +
+  theme_bw()
+```
