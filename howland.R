@@ -9,16 +9,16 @@ r_soil <- 730
 
 out <- tibble(
   method = "unconstrained",
-  f = rnorm(n, 0.5, 0.05),
-  phi = rbeta(n, 5, 5),
-  gpp = gpp_r(nep, r_soil, phi, f)
+  Beta = rnorm(n, 0.5, 0.05),
+  Rho = rbeta(n, 5, 5),
+  gpp = gpp_r(nep, r_soil, Rho, Beta)
 )
 
 out2 <- out %>%
   mutate(
     method = "constrained",
-    phi = rnorm(n, 0.56, 0.11),
-    gpp = gpp_r(nep, r_soil, phi, f)
+    Rho = rnorm(n, 0.56, 0.11),
+    gpp = gpp_r(nep, r_soil, Rho, Beta)
   )
 
 # NPP -- 535 (430-560)
@@ -45,9 +45,10 @@ mainplot <- out_all %>%
   theme_bw()
 
 params <- out_all %>%
-  pivot_longer(c(f:cue)) %>%
-  filter(name %in% c("f", "phi", "npp", "cue"),
-         !is.na(value))
+  pivot_longer(c(Beta:cue)) %>%
+  filter(name %in% c("Beta", "Rho", "npp", "cue"),
+         !is.na(value)) %>%
+  mutate(name = factor(name, c("Beta", "Rho", "npp", "cue")))
 
 inset <- ggplot(params) +
   aes(x = value, color = method) +
