@@ -33,7 +33,12 @@ out3 <- tibble(
 )
 
 out_all <- bind_rows(out, out2, out3) %>%
-  mutate(method = fct_inorder(method))
+  mutate(
+    method = factor(
+      method,
+      c("unconstrained", "constrained", "CUE")
+    )
+  )
 
 mainplot <- out_all %>%
   ggplot() +
