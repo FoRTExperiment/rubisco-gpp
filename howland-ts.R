@@ -31,14 +31,17 @@ result <- dat %>%
   mutate(gpp_df = map2(-NEE, Rsoil, draw_gpp_r)) %>%
   unnest(gpp_df)
 
-plt <- result %>%
+plt_data <- result %>%
   group_by(ts) %>%
   summarize(
     lo = quantile(gpp, 0.025),
     mid = mean(gpp),
     hi = quantile(gpp, 0.975)
   ) %>%
-  complete(ts = full_seq(ts, 1)) %>%
+  complete(ts = full_seq(ts, 1))
+
+plt <- plt_data %>%
+  filter(lubridate::year(ts) < 2006) %>%
   ggplot() +
   aes(x = ts, y = mid, ymin = lo, ymax = hi) +
   geom_ribbon(fill = "deepskyblue") +
@@ -48,5 +51,6 @@ plt <- result %>%
     x = "Date",
     y = expression("GPP" ~ (gC ~ m^-2 ~ year^-1))
   )
+plt
 
 ggsave("figures/howland-ts.png", plt, width = 5.8, height = 4)
