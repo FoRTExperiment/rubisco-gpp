@@ -1,8 +1,10 @@
 import csv
+import glob
 import os
 
 from pathlib import Path
 import luigi
+import numpy as np
 import pandas as pd
 
 from nirv.eenirv import ModisPoint
@@ -47,20 +49,81 @@ class CosoreSite:
 
 
 class Config(luigi.Config):
-    oneflux_dir = luigi.Parameter(default="/Users/darryl/mnt/data/oneflux")
+    oneflux_dir = luigi.Parameter(default="/Users/darryl/mnt/data/flux/oneflux")
     cosore_dir = luigi.Parameter(default="/Users/darryl/mnt/data/cosore")
     nirv_dir = luigi.Parameter(default="data/nirv/")
+    output_dir = luigi.Parameter(default="/Users/darryl/mnt/flux_finality")
 
 
 class FluxData(luigi.ExternalTask):
     site_id = luigi.Parameter()
-    flux_format = luigi.Parameter()
+    freq = luigi.Parameter()
+    _freq_mapper = {"30T": "HH", "1D": "DD"}
 
     def output(self):
-        if self.flux_format == "oneflux":
-            fname = os.path.join(Config().oneflux_dir)
-
+        oneflux_freq = self._freq_mapper.get(self.freq)
+        pat = os.path.join(
+            Config().oneflux_dir, f"FLX_{self.site_id}*{oneflux_freq}*.csv"
+        )
+        fname = glob.glob(pat)[0]
         return luigi.LocalTarget(fname)
+
+
+class AggregateFlux(luigi.Task):
+    site_id = luigi.Parameter()
+    freq = luigi.Parameter()
+    tz = luigi.Parameter()
+
+    def output(self):
+        fname = os.path.join(
+            Config().output_dir, "fluxes", f"{self.site_id}_{self.freq}.csv"
+        )
+        return luigi.LocalTarget(fname)
+
+    def requires(self):
+        return FluxData(site_id=self.site_id, freq=self.freq)
+
+    def run(self):
+
+        if self.freq == "30T":
+            dt_col = "TIMESTAMP_START"
+            dt_fmt = "%Y%m%d%H%M"
+        else:
+            dt_col = "TIMESTAMP"
+            dt_fmt = "%Y%m%d"
+
+        measure_vars = [
+            "NEE_VUT_REF",
+            "GPP_DT_VUT_REF",
+            "GPP_NT_VUT_REF",
+            "RECO_NT_VUT_REF",
+            "RECO_DT_VUT_REF",
+            "PPFD_IN",
+        ]
+
+        aux_vars = [
+            "NEE_VUT_REF_QC",
+            # "PPFD_IN_QC",
+            dt_col,
+        ]
+
+        df = pd.read_csv(self.input().path, usecols=measure_vars + aux_vars)
+
+        # QC varies by freq:
+        if self.freq == "30T":
+            df = df.loc[df["NEE_VUT_REF_QC"].isin([0, 1]), :]
+        elif self.freq == "1D":
+            df = df.loc[df["NEE_VUT_REF_QC"] > 0.85, :]
+        else:
+            raise NotImplementedError
+
+        df = df.replace(-9999, np.nan)  # handles PPFD_IN
+
+        df = df.set_index(pd.to_datetime(df[dt_col], format=dt_fmt))
+        df = df.sort_index()
+        agg_df = df[measure_vars].resample(self.freq).mean()
+        agg_df = agg_df.tz_localize(self.tz)
+        agg_df.to_csv(self.output().path, float_format="%.3f", index=True)
 
 
 class NIRvData(luigi.ExternalTask):
@@ -82,11 +145,63 @@ class NIRvData(luigi.ExternalTask):
 
 class COSOREData(luigi.ExternalTask):
     cosore_id = luigi.Parameter()
-    # NOPE just need a map of where the data is and we're done.
 
     def output(self):
-        fname = os.path.join(Config().cosore_dir, f"{cosore_id}.csv")
+        fname = os.path.join(
+            Config().cosore_dir, "datasets", f"data_{self.cosore_id}.csv"
+        )
         return luigi.LocalTarget(fname)
+
+
+class AggregateCOSORE(luigi.Task):
+    cosore_id = luigi.Parameter()
+    freq = luigi.Parameter()
+
+    def _map_ports(self):
+        ports = pd.read_csv(os.path.join(Config().cosore_dir, "ports.csv"))
+        port_map = (
+            ports.loc[
+                (ports["CSR_DATASET"] == self.cosore_id)
+                & (ports["CSR_TREATMENT"] == "None")
+            ]
+            .set_index("CSR_PORT")
+            .CSR_MSMT_VAR.to_dict()
+        )
+        return port_map
+
+    def _get_tz(self):
+        with open(os.path.join(Config().cosore_dir, "description.csv")) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row["CSR_DATASET"] == self.cosore_id:
+                    return row["CSR_TIMEZONE"]
+
+    def requires(self):
+        return COSOREData(self.cosore_id)
+
+    def output(self):
+        fname = os.path.join(
+            Config().output_dir, "cosore", f"{self.cosore_id}_{self.freq}.csv"
+        )
+        return luigi.LocalTarget(fname)
+
+    def run(self):
+        df = pd.read_csv(
+            self.input().path,
+            usecols=["CSR_TIMESTAMP_BEGIN", "CSR_PORT", "CSR_FLUX_CO2"],
+        )
+        df.loc[:, "measurement_type"] = df["CSR_PORT"].map(self._map_ports())
+        df = df.set_index(pd.to_datetime(df["CSR_TIMESTAMP_BEGIN"]))
+        df = df.sort_index()
+
+        timesteps = pd.date_range(str(df.index.year.min()), "2020", freq=self.freq)
+
+        agg_df = df.groupby(["measurement_type", timesteps.asof]).CSR_FLUX_CO2.mean()
+        agg_df = agg_df.reset_index(level=0)  # pivot out measurement_type
+
+        agg_df.index.name = "dt"
+        agg_df = agg_df.tz_localize(self._get_tz())
+        agg_df.to_csv(self.output().path, index=True, float_format="%0.3f")
 
 
 class DailyMunge(luigi.Task):
@@ -105,7 +220,9 @@ class DailyMunge(luigi.Task):
                 site_id=site_info.site_id, lat=site_info.lat, lon=site_info.lon
             ),
             "flux": FluxData(
-                site_id=site_info.site_id, flux_format=site_info.flux_format
+                site_id=site_info.site_id,
+                flux_format=site_info.flux_format,
+                tz=site_info.tz,
             ),
         }
         return tasks
