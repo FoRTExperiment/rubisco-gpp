@@ -2,6 +2,7 @@ import csv
 import glob
 import os
 
+from itertools import product
 from pathlib import Path
 import luigi
 import numpy as np
@@ -58,12 +59,12 @@ class Config(luigi.Config):
 class FluxData(luigi.ExternalTask):
     site_id = luigi.Parameter()
     freq = luigi.Parameter()
-    _freq_mapper = {"30T": "HH", "1D": "DD"}
+    _freq_mapper = {"30T": "H*", "1D": "DD"}
 
     def output(self):
         oneflux_freq = self._freq_mapper.get(self.freq)
         pat = os.path.join(
-            Config().oneflux_dir, f"FLX_{self.site_id}*{oneflux_freq}*.csv"
+            Config().oneflux_dir, f"FLX_{self.site_id}*_{oneflux_freq}_*.csv"
         )
         fname = glob.glob(pat)[0]
         return luigi.LocalTarget(fname)
@@ -123,7 +124,9 @@ class AggregateFlux(luigi.Task):
         df = df.sort_index()
         agg_df = df[measure_vars].resample(self.freq).mean()
         agg_df = agg_df.tz_localize(self.tz)
-        agg_df.to_csv(self.output().path, float_format="%.3f", index=True)
+        agg_df.index.name = "dt"
+        agg_df = agg_df.dropna(subset=["NEE_VUT_REF"])
+        agg_df["2003":].to_csv(self.output().path, float_format="%.3f", index=True)
 
 
 class NIRvData(luigi.ExternalTask):
@@ -140,7 +143,8 @@ class NIRvData(luigi.ExternalTask):
             parents=True, exist_ok=True
         )  # ensure outdir exists
         site_nirv = ModisPoint(self.lat, self.lon, 2003, 2019).run()
-        site_nirv.to_csv(self.output().path, float_format="%.2f")
+        site_nirv.index.name = "dt"
+        site_nirv.to_csv(self.output().path, index=True, float_format="%.2f")
 
 
 class COSOREData(luigi.ExternalTask):
@@ -188,53 +192,94 @@ class AggregateCOSORE(luigi.Task):
     def run(self):
         df = pd.read_csv(
             self.input().path,
-            usecols=["CSR_TIMESTAMP_BEGIN", "CSR_PORT", "CSR_FLUX_CO2"],
+            usecols=["CSR_TIMESTAMP_END", "CSR_PORT", "CSR_FLUX_CO2"],
         )
         df.loc[:, "measurement_type"] = df["CSR_PORT"].map(self._map_ports())
-        df = df.set_index(pd.to_datetime(df["CSR_TIMESTAMP_BEGIN"]))
+        df.loc[:, "dt"] = pd.to_datetime(df["CSR_TIMESTAMP_END"])
+        df = df.pivot_table(
+            index="dt",
+            columns="measurement_type",
+            values="CSR_FLUX_CO2",
+            aggfunc="mean",
+        )
         df = df.sort_index()
 
         timesteps = pd.date_range(str(df.index.year.min()), "2020", freq=self.freq)
-
-        agg_df = df.groupby(["measurement_type", timesteps.asof]).CSR_FLUX_CO2.mean()
-        agg_df = agg_df.reset_index(level=0)  # pivot out measurement_type
+        agg_df = df.groupby(timesteps.asof).mean()
 
         agg_df.index.name = "dt"
         agg_df = agg_df.tz_localize(self._get_tz())
         agg_df.to_csv(self.output().path, index=True, float_format="%0.3f")
 
 
-class DailyMunge(luigi.Task):
+class SiteMunge(luigi.Task):
     """
     Combine cosore, NIRv from MODIS and EC Fluxes together at daily timescale
+    TODO: PPFD average only over daylight hours
     """
 
     cosore_id = luigi.Parameter()
+    freq = luigi.Parameter()
 
     def requires(self):
         site_info = CosoreSite(self.cosore_id)
 
         tasks = {
-            "cosore": COSOREData(site_id=self.cosore_id),
+            "cosore": AggregateCOSORE(cosore_id=self.cosore_id, freq=self.freq),
             "nirv": NIRvData(
                 site_id=site_info.site_id, lat=site_info.lat, lon=site_info.lon
             ),
-            "flux": FluxData(
-                site_id=site_info.site_id,
-                flux_format=site_info.flux_format,
-                tz=site_info.tz,
+            "flux": AggregateFlux(
+                site_id=site_info.site_id, tz=site_info.tz, freq=self.freq
             ),
         }
         return tasks
 
     def output(self):
-        return Path().joinpath(Config().output_dir, f"{self.cosore_id}.csv")
+        fname = Path().joinpath(
+            Config().output_dir, f"{self.cosore_id}_{self.freq}.csv"
+        )
+        return luigi.LocalTarget(fname)
 
     def run(self):
         site_info = CosoreSite(
             self.cosore_id
         )  # could probably mix-in class but whatever.
-        cosore = pd.read_csv(self.input()["cosore"])
+
+        df_dict = {
+            k: pd.read_csv(v.path, index_col="dt", parse_dates=["dt"])
+            for k, v in self.input().items()
+        }
+
+        df = df_dict["flux"].copy()
+        df = df.join(df_dict["cosore"])
+        resample_nirv = df_dict["nirv"].resample(self.freq).ffill()
+        resample_nirv = resample_nirv.tz_localize(df.index.tz)
+        df = df.join(resample_nirv)
+
+        start_yr = df_dict["cosore"].index.min().year
+        end_yr = df_dict["cosore"].index.max().year
+
+        df[f"{start_yr}":f"{end_yr}"].to_csv(
+            self.output().path, index=True, float_format="%.3f"
+        )
+
+
+class Munge(luigi.Task):
+    """
+    Wrapper task to kickoff pipeline
+    """
+
+    def requires(self):
+        freqs = ["30T", "1D"]
+        cosore_ids = ["d20190424_ZHANG_maple"]
+
+        tasks = []
+
+        for freq, cosore_id in product(freqs, cosore_ids):
+            tasks.append(SiteMunge(cosore_id=cosore_id, freq=freq))
+
+        return tasks
 
 
 if __name__ == "__main__":
