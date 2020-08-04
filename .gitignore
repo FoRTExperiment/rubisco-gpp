@@ -1,6 +1,7 @@
 *.html
 /cosore/
 /figures/
+data/fluxes
 
 # python
 __pycache__/
