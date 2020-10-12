@@ -1,10 +1,18 @@
 *.html
 /cosore/
 /figures/
+data/fluxes
+
+# python
+__pycache__/
+/.ipynb_checkpoints/
 
 # R and RStudio
 .Rproj.user
 .Rhistory
+
+# Editor specific
+.idea/
 
 # OS-specific
 .DS_Store
