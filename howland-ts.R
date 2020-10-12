@@ -2,7 +2,7 @@ library(tidyverse)
 
 source("funs.R")
 
-dat <- read_csv("data/Ho1-flux.csv") %>%
+dat <- read_csv("data/Howland/Ho1-flux.csv") %>%
   mutate(
     ts = as.Date(as.character(TIMESTAMP), format = "%Y%m%d"),
     Rsoil = if_else(Rsoil > 0, Rsoil, NA_real_),
@@ -51,6 +51,6 @@ plt <- plt_data %>%
     x = "Date",
     y = expression("GPP" ~ (gC ~ m^-2 ~ year^-1))
   )
-plt
+print(plt)
 
 ggsave("figures/howland-ts.png", plt, width = 5.8, height = 4)

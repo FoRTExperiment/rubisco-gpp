@@ -3,7 +3,7 @@ library(fs)
 
 source("funs.R")
 
-dat <- read_csv(path("data", "mmsf_daily.csv")) %>%
+dat <- read_csv(path("data", "MMSF", "mmsf_daily.csv")) %>%
   select(doy, r_soil = Flux_gC) %>%
   mutate(
     ts = as.Date("2012-01-01") +
@@ -15,7 +15,7 @@ dat <- read_csv(path("data", "mmsf_daily.csv")) %>%
 ##   aes(x = ts, y = r_soil) +
 ##   geom_line()
 
-nirv <- path("data", "mms_daily_flux_nirv.csv") %>%
+nirv <- path("data", "MMSF", "mms_daily_flux_nirv.csv") %>%
   read_csv()
 
 # TODO: This is a fake NEE number
@@ -64,5 +64,5 @@ plt2 <- ggplot(plt_data) +
     y = expression(GPP[finality] - GPP[Ameriflux] ~ (gC ~ m^-2 ~ day^-1))
   ) +
   theme_bw()
-plt2
+print(plt2)
 ggsave("figures/mms-ts-error.png", plt2, width = 6, height = 3)
