@@ -1,7 +1,7 @@
+
+# Outputs
 *.html
-/cosore/
-/figures/
-data/fluxes
+figures/
 
 # python
 __pycache__/
