@@ -1,9 +1,7 @@
 site_id,name,network,lat,lon,igbp,analysis_years
 US-Ha1,Harvard Forest,Ameriflux,42.5378,-72.1715,DBF,
 US-Ho1,Howland Forest,Ameriflux,45.2041,-68.7402,ENF,
-US-MBS,University of Michigan Biological Station,Ameriflux,45.5598,-84.7138,DBF,2009
+US-UMB,University of Michigan Biological Station,Ameriflux,45.5598,-84.7138,DBF,2009
 US-MMS,Morgan Monroe,Ameriflux,39.3232,-86.4131,DBF,
 CA-Mer,Mer Bleue,Ameriflux,45.4094,-75.5186,WET,
 AU-Cum,Cumberland Plain,Ozflux,-33.6152,150.7236,ENF?,
-
-
